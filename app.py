@@ -9,8 +9,6 @@ app = Flask(__name__)
 
 # --- 🎯 您的固定名單 (MASTER ROSTER) ---
 MASTER_ROSTER = {
-   # --- 🎯 您的固定名單 (MASTER ROSTER) ---
-MASTER_ROSTER = {
     '1123003': '謝時臻',
     '1123025': '陳靖',
     '1123047': '吳昀軒',
@@ -122,11 +120,32 @@ CORS(app, resources={r"/api/*": {"origins": "https://new-5j38.onrender.com"}})
 
 # --- 建立資料表的函數 ---
 def create_table():
-    # 保持不變
-    # ... (您的 create_table 函數程式碼) ...
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS students (
+            id VARCHAR(50) PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            status VARCHAR(20) DEFAULT '出席',
+            leave_type VARCHAR(20),
+            leave_remarks TEXT,
+            last_updated_at TIMESTAMP
+        );
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        # 程式啟動時，如果資料庫還沒連上，會導致重試或失敗
+        print(f"Database table creation check failed: {e}")
+        if conn:
+            conn.close()
 
-# --- 啟動時先執行建立資料表的函數 ---
-# create_table() # 為了保持程式碼簡潔，我們假設這行您保留了
+# 程式啟動時執行建立資料表檢查
+create_table()
+
 
 # 測試 API 是否運作
 @app.route('/')
@@ -152,8 +171,8 @@ def handle_login():
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
-        
-        # 執行資料庫 UPSERT 操作 (保持不變)
+
+        # 執行資料庫 UPSERT 操作
         cur.execute(
             """
             INSERT INTO students (id, name, status, last_updated_at)
@@ -168,12 +187,12 @@ def handle_login():
             """,
             (student_id, student_name, current_time)
         )
-        
+
         student_data = cur.fetchone()
         conn.commit()
         cur.close()
         conn.close()
-        
+
         student = {
             "id": student_data[0],
             "name": student_data[1],
@@ -182,11 +201,82 @@ def handle_login():
             "leaveRemarks": student_data[4],
             "lastUpdatedAt": student_data[5]
         }
-        
+
         return jsonify(student)
 
     except Exception as e:
         print(f"Database error during login: {e}")
         return jsonify({"error": "伺服器內部錯誤"}), 500
 
-# ... (其餘 API 保持不變) ...
+# --- 「取得所有學生」 API (保持不變) ---
+@app.route('/api/students', methods=['GET'])
+def get_all_students():
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+
+        cur.execute("SELECT id, name, status, leave_type, leave_remarks, last_updated_at FROM students;")
+        all_students_data = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+        students_list = []
+        for student_data in all_students_data:
+            students_list.append({
+                "id": student_data[0],
+                "name": student_data[1],
+                "status": student_data[2],
+                "leaveType": student_data[3],
+                "leaveRemarks": student_data[4],
+                "lastUpdatedAt": student_data[5]
+            })
+
+        return jsonify(students_list)
+
+    except Exception as e:
+        print(f"Database error during get_all_students: {e}")
+        return jsonify({"error": "伺服器內部錯誤"}), 500
+
+
+# --- 「請假」 API (保持不變) ---
+@app.route('/api/leave', methods=['POST'])
+def handle_leave():
+    data = request.get_json()
+    student_id = data.get('studentId')
+    leave_type = data.get('leaveType')
+    remarks = data.get('remarks')
+    current_time = datetime.now()
+
+    if not student_id or not leave_type:
+        return jsonify({"error": "學生ID和請假類別不能為空"}), 400
+
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            UPDATE students 
+            SET status = '請假', 
+                leave_type = %s, 
+                leave_remarks = %s, 
+                last_updated_at = %s
+            WHERE id = %s;
+            """,
+            (leave_type, remarks, current_time, student_id)
+        )
+        conn.commit()
+
+        cur.close()
+        conn.close()
+
+        return jsonify({"message": "請假申請已記錄"})
+
+    except Exception as e:
+        print(f"Database error during leave: {e}")
+        return jsonify({"error": "伺服器內部錯誤"}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
