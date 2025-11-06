@@ -111,12 +111,11 @@ MASTER_ROSTER = {
     '1143133': '李珮安',
 }
 
-
 # 取得資料庫連線字串
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
 # 允許您的前端 (https://new-5j38.onrender.com) 跨網域連線
-CORS(app, resources={r"/api/*": {"origins": "https://new-5j38.onrender.com"}})
+CORS(app, resources={r"/api/v1/*": {"origins": "https://new-5j38.onrender.com"}})
 
 # --- 建立資料表的函數 ---
 def create_table():
@@ -136,10 +135,9 @@ def create_table():
         """)
         conn.commit()
         cur.close()
-        conn.close()
     except Exception as e:
-        # 程式啟動時，如果資料庫還沒連上，會導致重試或失敗
         print(f"Database table creation check failed: {e}")
+    finally:
         if conn:
             conn.close()
 
@@ -152,21 +150,25 @@ create_table()
 def home():
     return "後端 API 運作中 (Final Roster Check)！"
 
-# --- 「登入」 API (修正邏輯) ---
-@app.route('/api/login', methods=['POST'])
+# --- 「登入」 API (修正網址) ---
+@app.route('/api/v1/login', methods=['POST'])
 def handle_login():
     data = request.get_json()
     student_id = data.get('studentId')
-    student_name = data.get('studentName')
+    
+    # 🚀 關鍵修正：登入時不再需要姓名，僅依賴學號
+    # student_name = data.get('studentName') 
     current_time = datetime.now()
 
-    if not student_id or not student_name:
-        return jsonify({"error": "學號和姓名不能為空"}), 400
+    if not student_id:
+        return jsonify({"error": "學號不能為空"}), 400
 
-    # *** 🚀 關鍵修正：在後端執行名單驗證 ***
-    if student_id not in MASTER_ROSTER or MASTER_ROSTER[student_id] != student_name:
-        # 如果學號不在名冊中，或者學號與姓名不匹配，則拒絕登入
-        return jsonify({"error": "學號或姓名不符，請確認您的資料。"}), 401
+    # *** 🚀 關鍵修正：在後端執行名單驗證 (僅驗證學號) ***
+    if student_id not in MASTER_ROSTER:
+        return jsonify({"error": "學號不在名冊中，請確認。"}), 401
+    
+    # 從名冊中獲取正確的姓名
+    student_name = MASTER_ROSTER[student_id]
 
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -191,7 +193,6 @@ def handle_login():
         student_data = cur.fetchone()
         conn.commit()
         cur.close()
-        conn.close()
 
         student = {
             "id": student_data[0],
@@ -201,15 +202,17 @@ def handle_login():
             "leaveRemarks": student_data[4],
             "lastUpdatedAt": student_data[5]
         }
-
         return jsonify(student)
 
     except Exception as e:
         print(f"Database error during login: {e}")
         return jsonify({"error": "伺服器內部錯誤"}), 500
+    finally:
+        if conn:
+            conn.close()
 
-# --- 「取得所有學生」 API (保持不變) ---
-@app.route('/api/students', methods=['GET'])
+# --- 「取得所有學生」 API (修正網址) ---
+@app.route('/api/v1/students', methods=['GET'])
 def get_all_students():
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -217,9 +220,7 @@ def get_all_students():
 
         cur.execute("SELECT id, name, status, leave_type, leave_remarks, last_updated_at FROM students;")
         all_students_data = cur.fetchall()
-
         cur.close()
-        conn.close()
 
         students_list = []
         for student_data in all_students_data:
@@ -231,16 +232,18 @@ def get_all_students():
                 "leaveRemarks": student_data[4],
                 "lastUpdatedAt": student_data[5]
             })
-
         return jsonify(students_list)
 
     except Exception as e:
         print(f"Database error during get_all_students: {e}")
         return jsonify({"error": "伺服器內部錯誤"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 
-# --- 「請假」 API (保持不變) ---
-@app.route('/api/leave', methods=['POST'])
+# --- 「請假」 API (修正網址) ---
+@app.route('/api/v1/leave', methods=['POST'])
 def handle_leave():
     data = request.get_json()
     student_id = data.get('studentId')
@@ -267,15 +270,73 @@ def handle_leave():
             (leave_type, remarks, current_time, student_id)
         )
         conn.commit()
-
         cur.close()
-        conn.close()
-
         return jsonify({"message": "請假申請已記錄"})
 
     except Exception as e:
         print(f"Database error during leave: {e}")
         return jsonify({"error": "伺服器內部錯誤"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+# --- 🚀 新增：「刪除學生」 API ---
+@app.route('/api/v1/students/<string:student_id>', methods=['DELETE'])
+def handle_delete_student(student_id):
+    if not student_id:
+        return jsonify({"error": "缺少學生ID"}), 400
+    
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        cur.execute("DELETE FROM students WHERE id = %s;", (student_id,))
+        
+        rowcount = cur.rowcount
+        conn.commit()
+        cur.close()
+
+        if rowcount == 0:
+            return jsonify({"message": "學生不存在，無資料被刪除"}), 404
+        else:
+            return jsonify({"message": "學生已成功刪除"})
+
+    except Exception as e:
+        print(f"Database error during delete_student: {e}")
+        return jsonify({"error": "伺服器內部錯誤"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+# --- 🚀 新增：「重置所有學生」 API ---
+@app.route('/api/v1/admin/reset', methods=['POST'])
+def handle_admin_reset():
+    data = request.get_json()
+    password = data.get('password', '') # 獲取密碼，如果沒有則為空字串
+
+    # 建議您在 Render 的環境變數中設定一個 ADMIN_PASSWORD
+    ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '12345') # 預設一個簡單密碼 '12345'
+    
+    if password != ADMIN_PASSWORD:
+        return jsonify({"error": "管理員密碼錯誤"}), 403 # 403 Forbidden
+
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        # 刪除所有學生的紀錄
+        cur.execute("DELETE FROM students;")
+        
+        conn.commit()
+        cur.close()
+        return jsonify({"message": "所有學生狀態已成功重置"})
+
+    except Exception as e:
+        print(f"Database error during admin_reset: {e}")
+        return jsonify({"error": "伺服器內部錯誤"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
