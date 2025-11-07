@@ -338,6 +338,68 @@ def handle_admin_reset():
         if conn:
             conn.close()
 
+# --- 🚀🚀🚀 全新功能：「管理員重置出席狀態」 (設為 '出席默認') 🚀🚀🚀 ---
+@app.route('/api/v1/reset-attendance', methods=['POST'])
+def handle_attendance_reset():
+    data = request.get_json()
+    password_attempt = data.get('adminPassword') # 接收前端傳來的密碼
+
+    # 1. 從「環境變數」讀取正確的密碼 (這就是我們要在 Render 設定為 "119" 的變數)
+    CORRECT_PASSWORD = os.environ.get('ADMIN_RESET_PASSWORD')
+
+    # 2. 驗證密碼
+    if not CORRECT_PASSWORD:
+        # 提醒：如果您忘了在 Render 設定變數，這裡會印出錯誤
+        print("錯誤：ADMIN_RESET_PASSWORD 環境變數未設定")
+        return jsonify({"message": "伺服器設定錯誤"}), 500
+        
+    if password_attempt != CORRECT_PASSWORD:
+        # 密碼錯誤
+        return jsonify({"message": "密碼錯誤，請重試。"}), 401
+
+    # 3. 密碼正確！開始執行資料庫操作
+    conn = None # 先宣告 conn
+    try:
+        # 建立資料庫連線 (使用您檔案中的 DATABASE_URL)
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        current_time = datetime.now()
+
+        # ！！！ 這是您要的關鍵指令 ！！！
+        # 將 'students' 資料表中「所有」的 'status' 欄位
+        # 更新為 '出席默認'，並同時更新時間戳
+        cur.execute(
+            """
+            UPDATE students 
+            SET status = '出席默認', 
+                last_updated_at = %s,
+                leave_type = NULL,      -- 同時清除請假類別
+                leave_remarks = NULL    -- 同時清除請假備註
+            """,
+            (current_time,)
+        )
+        
+        conn.commit() # 提交變更
+        cur.close()
+        
+        print("管理員已成功重置所有學生狀態為 '出席默認'")
+
+        # 4. 回傳成功訊息
+        return jsonify({"message": "成功：已將所有人員狀態重置為「出席默認」。"})
+
+    except Exception as e:
+        if conn:
+            conn.rollback() # 如果出錯，回滾
+        print(f"Database error during attendance_reset: {e}")
+        return jsonify({"message": "伺服器錯誤：資料庫更新失敗。"}), 500
+    finally:
+        if conn:
+            conn.close() # 確保連線一定會關閉
+
+# --- 新功能程式碼結束 ---
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
