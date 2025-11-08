@@ -1,5 +1,3 @@
-# 這是 app.py 檔案的完整、最終、無錯誤的代碼
-
 import os
 import psycopg2
 from flask import Flask, request, jsonify
@@ -7,10 +5,11 @@ from flask_cors import CORS
 from datetime import datetime
 from time import sleep
 
-app = Flask(__name__) 
+app = Flask(__name__) # 只需要定義一次
 
 # --- 🎯 您的固定名單 (MASTER ROSTER) ---
 MASTER_ROSTER = {
+    # ... (請將您的所有學生名單完整貼回這裡) ...
     '1123003': '謝昀臻', 
     '1123025': '陳靖',
     '1123047': '吳昀軒',
@@ -112,43 +111,42 @@ MASTER_ROSTER = {
     '1143132': '楊佳玲',
     '1143133': '李珮安',
 }
+
 # 取得資料庫連線字串
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
-# 🚀 CORS 配置
+# CORS 配置，允許您的前端 Render 網址
 CORS(app, resources={r"/api/v1/*": {
     "origins": [
-        "https://new-5j38.onrender.com", 
+        "https://new-5j38.onrender.com",
         "http://localhost:3000",
         "http://localhost:4200"
     ],
-    "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    "allow_headers": ["Content-Type", "Authorization"]
+    "supports_credentials": True
 }})
 
-# --- 建立資料表的函數 ---
+# --- 資料表建立函式 ---
 def create_table():
     conn = None
     try:
-        if not DATABASE_URL:
-             print("錯誤：DATABASE_URL 環境變數未設定，無法連線資料庫。")
-             return
-             
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
+        
         cur.execute("""
         CREATE TABLE IF NOT EXISTS students (
             id VARCHAR(50) PRIMARY KEY,
             name VARCHAR(100) NOT NULL,
-            status VARCHAR(20) DEFAULT '出席',
-            leave_type VARCHAR(20),
-            leave_remarks TEXT,
+            status VARCHAR(50) NOT NULL DEFAULT '未簽到',
+            leave_type VARCHAR(50) NULL,
+            leave_remarks TEXT NULL,
             last_updated_at TIMESTAMP
         );
         """)
+        
         conn.commit()
         cur.close()
     except Exception as e:
+        # 這裡的錯誤會被記錄在 Render Logs，但不會造成伺服器停止
         print(f"Database table creation check failed: {e}")
     finally:
         if conn and not conn.closed:
@@ -157,11 +155,9 @@ def create_table():
 # 程式啟動時執行建立資料表檢查
 create_table()
 
-
-# 測試 API 是否運作
 @app.route('/')
 def home():
-    return "後端 API 運作中 (Final Roster Check)！"
+    return jsonify({"message": "點名系統後端服務正在運行"})
 
 # --- 「登入」 API ---
 @app.route('/api/v1/login', methods=['POST'])
@@ -170,46 +166,63 @@ def handle_login():
     student_id = data.get('studentId')
     current_time = datetime.now()
 
-    if not student_id:
-        return jsonify({"error": {"error": "errors.emptyFields"}}), 400
+    if not student_id or student_id not in MASTER_ROSTER:
+        return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 404
 
-    if student_id not in MASTER_ROSTER:
-        return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 401
-    
     student_name = MASTER_ROSTER[student_id]
-
+    conn = None
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
 
-        cur.execute(
-            """
-            INSERT INTO students (id, name, status, last_updated_at)
-            VALUES (%s, %s, '出席', %s)
-            ON CONFLICT (id) DO UPDATE SET
-                name = EXCLUDED.name,
-                status = '出席',
-                leave_type = NULL,
-                leave_remarks = NULL,
-                last_updated_at = EXCLUDED.last_updated_at
-            RETURNING *; 
-            """,
-            (student_id, student_name, current_time)
-        )
+        # 檢查學生是否已存在
+        cur.execute("SELECT status, leave_type, leave_remarks, last_updated_at FROM students WHERE id = %s;", (student_id,))
+        record = cur.fetchone()
 
-        student_data = cur.fetchone()
-        conn.commit()
-        cur.close()
+        if record:
+            # 學生已存在，回傳目前狀態
+            status, leave_type, leave_remarks, last_updated_at = record
+            
+            # 如果狀態是 '未簽到'，則將其更新為 '出席'
+            if status == '未簽到':
+                cur.execute(
+                    "UPDATE students SET status = '出席', last_updated_at = %s WHERE id = %s;",
+                    (current_time, student_id)
+                )
+                conn.commit()
+                status = '出席' # 更新回傳的狀態
 
-        student = {
-            "id": student_data[0],
-            "name": student_data[1],
-            "status": student_data[2],
-            "leaveType": student_data[3],
-            "leaveRemarks": student_data[4],
-            "lastUpdatedAt": student_data[5]
-        }
-        return jsonify(student)
+            # 確保 leave_type 和 leave_remarks 不為 None
+            leave_type = leave_type if leave_type else None
+            leave_remarks = leave_remarks if leave_remarks else None
+            
+            return jsonify({
+                "id": student_id,
+                "name": student_name,
+                "status": status,
+                "leaveType": leave_type,
+                "leaveRemarks": leave_remarks,
+                "lastUpdatedAt": last_updated_at
+            })
+
+        else:
+            # 學生不存在，插入新紀錄，預設為 '出席'
+            cur.execute(
+                """
+                INSERT INTO students (id, name, status, last_updated_at)
+                VALUES (%s, %s, '出席', %s);
+                """,
+                (student_id, student_name, current_time)
+            )
+            conn.commit()
+            return jsonify({
+                "id": student_id,
+                "name": student_name,
+                "status": '出席',
+                "leaveType": None,
+                "leaveRemarks": None,
+                "lastUpdatedAt": current_time
+            })
 
     except Exception as e:
         print(f"Database error during login: {e}")
@@ -218,27 +231,32 @@ def handle_login():
         if conn and not conn.closed:
             conn.close()
 
-# 🚀 修正：補上遺失的「取得所有學生」 API (這是造成 404 的原因)
+# --- 「取得所有學生」 API ---
 @app.route('/api/v1/students', methods=['GET'])
 def get_all_students():
+    conn = None
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
-
+        
         cur.execute("SELECT id, name, status, leave_type, leave_remarks, last_updated_at FROM students;")
         all_students_data = cur.fetchall()
         cur.close()
 
         students_list = []
         for student_data in all_students_data:
+            # 將 last_updated_at 轉換為字串以便 JSON 序列化
+            last_updated_at_str = student_data[5].isoformat() if student_data[5] else None
+            
             students_list.append({
                 "id": student_data[0],
                 "name": student_data[1],
                 "status": student_data[2],
                 "leaveType": student_data[3],
                 "leaveRemarks": student_data[4],
-                "lastUpdatedAt": student_data[5]
+                "lastUpdatedAt": last_updated_at_str
             })
+            
         return jsonify(students_list)
 
     except Exception as e:
@@ -248,16 +266,141 @@ def get_all_students():
         if conn and not conn.closed:
             conn.close()
 
+# --- 「請假」 API ---
+@app.route('/api/v1/leave', methods=['POST'])
+def handle_leave_application():
+    data = request.get_json()
+    student_id = data.get('studentId')
+    leave_type = data.get('leaveType')
+    remarks = data.get('remarks')
+    current_time = datetime.now()
 
-# --- (請假、刪除學生的 API 保持不變，確保它們也在您的檔案中) ---
+    if not student_id or not leave_type:
+        return jsonify({"error": {"error": "errors.emptyFields"}}), 400
 
-# 這是管理員重置路由
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            UPDATE students 
+            SET status = '請假', 
+                leave_type = %s,
+                leave_remarks = %s,
+                last_updated_at = %s
+            WHERE id = %s;
+            """,
+            ('請假-'+leave_type, remarks, current_time, student_id)
+        )
+        
+        if cur.rowcount == 0:
+             # 如果資料庫沒有這個學生，則創建它
+            if student_id in MASTER_ROSTER:
+                student_name = MASTER_ROSTER[student_id]
+                cur.execute(
+                    """
+                    INSERT INTO students (id, name, status, leave_type, leave_remarks, last_updated_at)
+                    VALUES (%s, %s, '請假', %s, %s, %s);
+                    """,
+                    (student_id, student_name, '請假-'+leave_type, remarks, current_time)
+                )
+            else:
+                conn.rollback()
+                return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 404
+
+        conn.commit()
+        cur.close()
+        
+        return jsonify({"message": "請假申請已提交"})
+
+    except Exception as e:
+        print(f"Database error during leave_application: {e}")
+        return jsonify({"error": {"error": "errors.leaveFailed"}}), 500
+    finally:
+        if conn and not conn.closed:
+            conn.close()
+
+# --- 「刪除學生」 API ---
+@app.route('/api/v1/students/<string:student_id>', methods=['DELETE'])
+def handle_delete_student(student_id):
+    if not student_id:
+        return jsonify({"error": "缺少學生ID"}), 400
+    
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        cur.execute("DELETE FROM students WHERE id = %s;", (student_id,))
+        rowcount = cur.rowcount
+        conn.commit()
+
+        cur.close()
+
+        if rowcount == 0:
+            return jsonify({"message": "學生不存在，無資料被刪除"}), 404
+        else:
+            return jsonify({"message": "學生已成功刪除"})
+
+    except Exception as e:
+        print(f"Database error during delete_student: {e}")
+        return jsonify({"error": "伺服器內部錯誤"}), 500
+    finally:
+        if conn and not conn.closed:
+            conn.close()
+
+# --- 「管理員重置」 API ---
 @app.route('/api/v1/admin/reset', methods=['POST'])
 def handle_admin_reset():
-    # ... (函式內容保持不變，因為它已經能運作) ...
-    # ... (請確保您在本地 app.py 中有完整的 handle_admin_reset 函式) ...
-    pass # 移除此行，放回您完整的 handle_admin_reset 函式
+    data = request.get_json()
+    password_attempt = data.get('password')
+    
+    # 從「環境變數」讀取正確的變數名稱 (應已在 Render 設定)
+    ADMIN_PASSWORD_VALUE = os.environ.get('ADMIN_RESET_PASSWORD') 
+
+    # 1. 驗證密碼和服務設定
+    if not ADMIN_PASSWORD_VALUE: 
+        print("錯誤：ADMIN_RESET_PASSWORD 環境變數未設定，重置被拒絕。")
+        return jsonify({"error": {"error": "errors.resetFailed"}}), 500
+        
+    if password_attempt != ADMIN_PASSWORD_VALUE: 
+        return jsonify({"error": {"error": "errors.passwordIncorrect"}}), 403 
+
+    # 2. 密碼正確！開始執行資料庫操作
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        current_time = datetime.now()
+        
+        cur.execute(
+            """
+            UPDATE students 
+            SET status = '出席',
+                last_updated_at = %s,
+                leave_type = NULL,      
+                leave_remarks = NULL    
+            """,
+            (current_time,)
+        )
+        
+        conn.commit() 
+        cur.close()
+        
+        return jsonify({"message": "成功：已將所有人員狀態重置為「出席」。"})
+
+    except Exception as e:
+        if conn:
+            conn.rollback() 
+        print(f"Database error during admin_reset: {e}")
+        return jsonify({"error": {"error": "errors.resetFailed"}}), 500
+    finally:
+        if conn and not conn.closed:
+            conn.close() 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
+    # 這裡使用 gunicorn 啟動是 Render 推薦的方式，但在本地測試可以用 app.run()
     app.run(host='0.0.0.0', port=port)
