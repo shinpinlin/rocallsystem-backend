@@ -28,7 +28,6 @@ CORS(app, resources={r"/api/v1/*": {
 
 # --- 建立資料表的函數 ---
 def create_table():
-# ... (create_table 函式內容保持不變) ...
     conn = None
     try:
         if not DATABASE_URL:
@@ -37,6 +36,8 @@ def create_table():
              
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
+        
+        # 🚀 關鍵修正：確保這裡只有純粹的 SQL 語法
         cur.execute("""
         CREATE TABLE IF NOT EXISTS students (
             id VARCHAR(50) PRIMARY KEY,
@@ -47,14 +48,15 @@ def create_table():
             last_updated_at TIMESTAMP
         );
         """)
+        
         conn.commit()
         cur.close()
     except Exception as e:
+        # 這裡的錯誤會被記錄在 Render Logs
         print(f"Database table creation check failed: {e}")
     finally:
         if conn and not conn.closed:
             conn.close()
-
 # 程式啟動時執行建立資料表檢查
 create_table()
 
