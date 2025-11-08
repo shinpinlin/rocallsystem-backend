@@ -2,7 +2,7 @@ import os
 import psycopg2
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from datetime import datetime
+from datetime import datetime, timezone # 1. 導入 timezone
 from time import sleep
 
 app = Flask(__name__) # 只需要定義一次
@@ -114,7 +114,7 @@ MASTER_ROSTER = {
 # 取得資料庫連線字串
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
-# CORS 配置，允許您的前端 Render 網址
+# CORS 配置
 CORS(app, resources={r"/api/v1/*": {
     "origins": [
         "https://new-5j38.onrender.com",
@@ -129,9 +129,9 @@ def create_table():
     conn = None
     try:
         if not DATABASE_URL:
-             print("錯誤：DATABASE_URL 環境變數未設定，無法連線資料庫。")
-             return
-             
+            print("錯誤：DATABASE_URL 環境變數未設定，無法連線資料庫。")
+            return
+            
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         
@@ -142,7 +142,8 @@ def create_table():
             status VARCHAR(50) NOT NULL DEFAULT '未簽到',
             leave_type VARCHAR(50) NULL,
             leave_remarks TEXT NULL,
-            last_updated_at TIMESTAMP
+            -- 2. 修正：將 TIMESTAMP 改為 TIMESTAMPTZ (帶有時區的時間戳)
+            last_updated_at TIMESTAMPTZ 
         );
         """)
         
@@ -166,7 +167,8 @@ def home():
 def handle_login():
     data = request.get_json()
     student_id = data.get('studentId')
-    current_time = datetime.now()
+    # 3. 修正：使用 timezone.utc 取得標準時間
+    current_time = datetime.now(timezone.utc)
 
     if not student_id or student_id not in MASTER_ROSTER:
         return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 404
@@ -177,18 +179,14 @@ def handle_login():
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
 
-        # 檢查學生是否已存在
         cur.execute("SELECT status, leave_type, leave_remarks, last_updated_at FROM students WHERE id = %s;", (student_id,))
         record = cur.fetchone()
 
-        # 關鍵修正：判斷狀態是否為請假
         is_current_status_leave = record and record[0] == '請假' 
         
         if record:
-            # 學生已存在
             status, leave_type, leave_remarks, last_updated_at = record
             
-            # 修正：狀態不是請假時，強制更新為 '出席'
             if not is_current_status_leave:
                 cur.execute(
                     "UPDATE students SET status = '出席', last_updated_at = %s, leave_type = NULL, leave_remarks = NULL WHERE id = %s;",
@@ -196,10 +194,9 @@ def handle_login():
                 )
                 conn.commit()
                 status = '出席'
-                leave_type = None # 確保清除請假類型
+                leave_type = None
                 leave_remarks = None
             
-            # 確保 leave_type 和 leave_remarks 不為 None
             leave_type = leave_type if leave_type else None
             leave_remarks = leave_remarks if leave_remarks else None
             
@@ -209,11 +206,11 @@ def handle_login():
                 "status": status,
                 "leaveType": leave_type,
                 "leaveRemarks": leave_remarks,
-                "lastUpdatedAt": last_updated_at
+                # 4. 修正：確保 last_updated_at 是 ISO 格式 (它會包含 +00:00 時區資訊)
+                "lastUpdatedAt": last_updated_at.isoformat() if last_updated_at else None
             })
 
         else:
-            # 學生不存在，插入新紀錄，預設為 '出席'
             cur.execute(
                 """
                 INSERT INTO students (id, name, status, last_updated_at)
@@ -228,7 +225,7 @@ def handle_login():
                 "status": '出席',
                 "leaveType": None,
                 "leaveRemarks": None,
-                "lastUpdatedAt": current_time
+                "lastUpdatedAt": current_time.isoformat()
             })
 
     except Exception as e:
@@ -252,6 +249,7 @@ def get_all_students():
 
         students_list = []
         for student_data in all_students_data:
+            # 5. 修正：確保 last_updated_at 是 ISO 格式 (它會包含 +00:00 時區資訊)
             last_updated_at_str = student_data[5].isoformat() if student_data[5] else None
             
             students_list.append({
@@ -279,7 +277,8 @@ def handle_leave_application():
     student_id = data.get('studentId')
     leave_type = data.get('leaveType')
     remarks = data.get('remarks')
-    current_time = datetime.now()
+    # 6. 修正：使用 timezone.utc 取得標準時間
+    current_time = datetime.now(timezone.utc)
 
     if not student_id or not leave_type:
         return jsonify({"error": {"error": "errors.emptyFields"}}), 400
@@ -289,6 +288,7 @@ def handle_leave_application():
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
 
+        # 7. 修正：不再儲存 '請假-' 前綴，只儲存假別 (例如 '論文假')
         cur.execute(
             """
             UPDATE students 
@@ -298,7 +298,7 @@ def handle_leave_application():
                 last_updated_at = %s
             WHERE id = %s;
             """,
-            ('請假-'+leave_type, remarks, current_time, student_id)
+            (leave_type, remarks, current_time, student_id)
         )
         
         if cur.rowcount == 0:
@@ -309,7 +309,7 @@ def handle_leave_application():
                     INSERT INTO students (id, name, status, leave_type, leave_remarks, last_updated_at)
                     VALUES (%s, %s, '請假', %s, %s, %s);
                     """,
-                    (student_id, student_name, '請假-'+leave_type, remarks, current_time)
+                    (student_id, student_name, leave_type, remarks, current_time)
                 )
             else:
                 conn.rollback()
@@ -362,10 +362,8 @@ def handle_admin_reset():
     data = request.get_json()
     password_attempt = data.get('password')
     
-    # 從「環境變數」讀取正確的變數名稱 (已修正為 ADMIN_RESET_PASSWORD)
     ADMIN_PASSWORD_VALUE = os.environ.get('ADMIN_RESET_PASSWORD') 
 
-    # 1. 驗證密碼和服務設定
     if not ADMIN_PASSWORD_VALUE: 
         print("錯誤：ADMIN_RESET_PASSWORD 環境變數未設定，重置被拒絕。")
         return jsonify({"error": {"error": "errors.resetFailed"}}), 500
@@ -373,20 +371,19 @@ def handle_admin_reset():
     if password_attempt != ADMIN_PASSWORD_VALUE: 
         return jsonify({"error": {"error": "errors.passwordIncorrect"}}), 403 
 
-    # 2. 密碼正確！開始執行資料庫操作
     conn = None
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
-        current_time = datetime.now()
+        # 8. 修正：使用 timezone.utc 取得標準時間
+        current_time = datetime.now(timezone.utc)
         
-        # 關鍵修正：確保狀態被設為 '出席'，且沒有 WHERE 條件
         cur.execute(
             """
             UPDATE students 
             SET status = '出席',
                 last_updated_at = %s,
-                leave_type = NULL,      
+                leave_type = NULL,     
                 leave_remarks = NULL    
             """,
             (current_time,)
