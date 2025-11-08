@@ -121,8 +121,8 @@ CORS(app, resources={r"/api/v1/*": {
         "http://localhost:3000",
         "http://localhost:4200"
     ],
-    "supports_credentials": True # 🚀 修正 CORS 語法錯誤：這裡遺漏了 '}'
-}}) # <--- 這裡也要確保 } 和 ) 正確閉合
+    "supports_credentials": True 
+}})
 
 # --- 資料表建立函式 ---
 def create_table():
@@ -181,7 +181,7 @@ def handle_login():
         cur.execute("SELECT status, leave_type, leave_remarks, last_updated_at FROM students WHERE id = %s;", (student_id,))
         record = cur.fetchone()
 
-        # 🚀 關鍵修正：判斷狀態是否為請假
+        # 關鍵修正：判斷狀態是否為請假
         is_current_status_leave = record and record[0] == '請假' 
         
         if record:
