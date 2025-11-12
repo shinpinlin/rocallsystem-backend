@@ -171,12 +171,7 @@ def handle_login():
 
     if not student_id or student_id not in MASTER_ROSTER:
         return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 404
-
-    student_name = MASTER_ROSTER[student_id]
-    conn = None
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
+ student_name = MASTER_ROSTER[student_id] conn = None  conn = psycopg2.connect(DATABASE_U    cur = conn.cursor()
 
         cur.execute("SELECT status, leave_type, leave_remarks, last_updated_at FROM students WHERE id = %s;", (student_id,))
         record = cur.fetchone()
@@ -286,40 +281,79 @@ def handle_login():
             conn.close()
 
 # --- 「取得所有學生」 API ---
-@app.route('/api/v1/students', methods=['GET'])
-def get_all_students():
+@app.route('/api/v1/login', methods=['POST'])
+def handle_login():
+    data = request.get_json()
+    student_id = data.get('studentId')
+    current_time = datetime.now(timezone.utc)
+
+    if not student_id or student_id not in MASTER_ROSTER:
+        return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 404
+
+    student_name = MASTER_ROSTER[student_id]
     conn = None
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
 
-        cur.execute("SELECT id, name, status, leave_type, leave_remarks, last_updated_at FROM students;")
-        all_students_data = cur.fetchall()
-        cur.close()
+        cur.execute("SELECT status, leave_type, leave_remarks, last_updated_at FROM students WHERE id = %s;", (student_id,))
+        record = cur.fetchone()
 
-        students_list = []
-        for student_data in all_students_data:
-            # 5. 修正：確保 last_updated_at 是 ISO 格式 (它會包含 +00:00 時區資訊)
-            last_updated_at_str = student_data[5].isoformat() if student_data[5] else None
-            
-            students_list.append({
-                "id": student_data[0],
-                "name": student_data[1],
-                "status": student_data[2],
-                "leaveType": student_data[3],
-                "leaveRemarks": student_data[4],
-                "lastUpdatedAt": last_updated_at_str
+        is_current_status_leave = record and record[0] == '請假' 
+        
+        if record:
+            status, leave_type, leave_remarks, last_updated_at = record
+
+            # 每次登入即時刷新時間
+            cur.execute("UPDATE students SET last_updated_at = %s WHERE id = %s;", (current_time, student_id))
+            conn.commit()
+
+            if not is_current_status_leave:
+                cur.execute(
+                    "UPDATE students SET status = '出席', last_updated_at = %s, leave_type = NULL, leave_remarks = NULL WHERE id = %s;",
+                    (current_time, student_id)
+                )
+                conn.commit()
+                status = '出席'
+                leave_type = None
+                leave_remarks = None
+
+            leave_type = leave_type if leave_type else None
+            leave_remarks = leave_remarks if leave_remarks else None
+
+            return jsonify({
+                "id": student_id,
+                "name": student_name,
+                "status": status,
+                "leaveType": leave_type,
+                "leaveRemarks": leave_remarks,
+                "lastUpdatedAt": current_time.isoformat()
             })
-            
-        return jsonify(students_list)
+
+        else:
+            cur.execute(
+                """
+                INSERT INTO students (id, name, status, last_updated_at)
+                VALUES (%s, %s, '出席', %s);
+                """,
+                (student_id, student_name, current_time)
+            )
+            conn.commit()
+            return jsonify({
+                "id": student_id,
+                "name": student_name,
+                "status": '出席',
+                "leaveType": None,
+                "leaveRemarks": None,
+                "lastUpdatedAt": current_time.isoformat()
+            })
 
     except Exception as e:
-        print(f"Database error during get_all_students: {e}")
-        return jsonify({"error": "伺服器內部錯誤"}), 500
+        print(f"Database error during login: {e}")
+        return jsonify({"error": {"error": "errors.loginFailed"}}), 500
     finally:
         if conn and not conn.closed:
             conn.close()
-
 # --- 「請假」 API ---
 @app.route('/api/v1/leave', methods=['POST'])
 def handle_leave_application():
