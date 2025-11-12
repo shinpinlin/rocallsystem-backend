@@ -407,41 +407,79 @@ def handle_delete_student(student_id):
             conn.close()
 
 # --- 「管理員重置」 API ---
-@app.route('/api/v1/admin/reset', methods=['POST'])
-def handle_admin_reset():
+@app.route('/api/v1/login', methods=['POST'])
+def handle_login():
     data = request.get_json()
-    password_attempt = data.get('password')
-    
-    ADMIN_PASSWORD_VALUE = os.environ.get('ADMIN_RESET_PASSWORD') 
+    student_id = data.get('studentId')
+    current_time = datetime.now(timezone.utc)
 
-    if not ADMIN_PASSWORD_VALUE: 
-        print("錯誤：ADMIN_RESET_PASSWORD 環境變數未設定，重置被拒絕。")
-        return jsonify({"error": {"error": "errors.resetFailed"}}), 500
-        
-    if password_attempt != ADMIN_PASSWORD_VALUE: 
-        return jsonify({"error": {"error": "errors.passwordIncorrect"}}), 403 
+    if not student_id or student_id not in MASTER_ROSTER:
+        return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 404
 
+    student_name = MASTER_ROSTER[student_id]
     conn = None
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
-        # 8. 修正：使用 timezone.utc 取得標準時間
-        current_time = datetime.now(timezone.utc)
+
+        cur.execute("SELECT status, leave_type, leave_remarks, last_updated_at FROM students WHERE id = %s;", (student_id,))
+        record = cur.fetchone()
+
+        is_current_status_leave = record and record[0] == '請假' 
         
-        cur.execute(
-            """
-            UPDATE students 
-            SET status = '出席',
-                last_updated_at = %s,
-                leave_type = NULL,     
-                leave_remarks = NULL    
-            """,
-            (current_time,)
-        )
-        
-        conn.commit() 
-        cur.close()
-        
+        if record:
+            status, leave_type, leave_remarks, last_updated_at = record
+
+            # 每次登入即時刷新時間
+            cur.execute("UPDATE students SET last_updated_at = %s WHERE id = %s;", (current_time, student_id))
+            conn.commit()
+
+            if not is_current_status_leave:
+                cur.execute(
+                    "UPDATE students SET status = '出席', last_updated_at = %s, leave_type = NULL, leave_remarks = NULL WHERE id = %s;",
+                    (current_time, student_id)
+                )
+                conn.commit()
+                status = '出席'
+                leave_type = None
+                leave_remarks = None
+
+            leave_type = leave_type if leave_type else None
+            leave_remarks = leave_remarks if leave_remarks else None
+
+            return jsonify({
+                "id": student_id,
+                "name": student_name,
+                "status": status,
+                "leaveType": leave_type,
+                "leaveRemarks": leave_remarks,
+                "lastUpdatedAt": current_time.isoformat()
+            })
+
+        else:
+            cur.execute(
+                """
+                INSERT INTO students (id, name, status, last_updated_at)
+                VALUES (%s, %s, '出席', %s);
+                """,
+                (student_id, student_name, current_time)
+            )
+            conn.commit()
+            return jsonify({
+                "id": student_id,
+                "name": student_name,
+                "status": '出席',
+                "leaveType": None,
+                "leaveRemarks": None,
+                "lastUpdatedAt": current_time.isoformat()
+            })
+
+    except Exception as e:
+        print(f"Database error during login: {e}")
+        return jsonify({"error": {"error": "errors.loginFailed"}}), 500
+    finally:
+        if conn and not conn.closed:
+            conn.close()
         return jsonify({"message": "成功：已將所有人員狀態重置為「出席」。"})
 
     except Exception as e:
