@@ -3,8 +3,11 @@ import psycopg2
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from datetime import datetime, timezone, timedelta
-TST = timezone(timedelta(hours=8))  # 台灣時區物件
+
+TST = timezone(timedelta(hours=8))  # 台灣時區
+
 app = Flask(__name__)
+
 MASTER_ROSTER = {
     '1123003': '謝昀臻', 
     '1123025': '陳靖',
@@ -127,14 +130,14 @@ def create_table():
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         cur.execute("""
-        CREATE TABLE IF NOT EXISTS students (
-            id VARCHAR(50) PRIMARY KEY,
-            name VARCHAR(100) NOT NULL,
-            status VARCHAR(50) NOT NULL DEFAULT '未簽到',
-            leave_type VARCHAR(50) NULL,
-            leave_remarks TEXT NULL,
-            last_updated_at TIMESTAMPTZ
-        );
+            CREATE TABLE IF NOT EXISTS students (
+                id VARCHAR(50) PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
+                status VARCHAR(50) NOT NULL DEFAULT '未簽到',
+                leave_type VARCHAR(50) NULL,
+                leave_remarks TEXT NULL,
+                last_updated_at TIMESTAMPTZ
+            );
         """)
         conn.commit()
         cur.close()
@@ -157,6 +160,7 @@ def handle_login():
     current_time = datetime.now(TST)
     if not student_id or student_id not in MASTER_ROSTER:
         return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 404
+
     student_name = MASTER_ROSTER[student_id]
     conn = None
     try:
@@ -259,7 +263,8 @@ def handle_leave_application():
     student_id = data.get('studentId')
     leave_type = data.get('leaveType')
     remarks = data.get('remarks')
-   current_time = datetime.now(TST)
+    current_time = datetime.now(TST)
+
     if not student_id or not leave_type:
         return jsonify({"error": {"error": "errors.emptyFields"}}), 400
 
