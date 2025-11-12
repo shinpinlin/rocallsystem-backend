@@ -2,10 +2,8 @@ import os
 import psycopg2
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, timedelta
 app = Flask(__name__)
-
 MASTER_ROSTER = {
     '1123003': '謝昀臻', 
     '1123025': '陳靖',
