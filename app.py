@@ -3,6 +3,7 @@ import psycopg2
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from datetime import datetime, timezone, timedelta
+TST = timezone(timedelta(hours=8))  # 台灣時區物件
 app = Flask(__name__)
 MASTER_ROSTER = {
     '1123003': '謝昀臻', 
@@ -153,9 +154,8 @@ def home():
 def handle_login():
     data = request.get_json()
     student_id = data.get('studentId')
-    current_time = datetime.now(timezone.utc) + timedelta(hours=8)
-
-    if not student_id or student_id not in MASTER_ROSTER:
+    current_time = datetime.now(TST)
+     if not student_id or student_id not in MASTER_ROSTER:
         return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 404
 
     student_name = MASTER_ROSTER[student_id]
@@ -260,7 +260,7 @@ def handle_leave_application():
     student_id = data.get('studentId')
     leave_type = data.get('leaveType')
     remarks = data.get('remarks')
-    current_time = datetime.now(timezone.utc)
+   current_time = datetime.now(TST)
 
     if not student_id or not leave_type:
         return jsonify({"error": {"error": "errors.emptyFields"}}), 400
@@ -352,8 +352,7 @@ def handle_admin_reset():
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
-        current_time = datetime.now(timezone.utc)
-
+        current_time = datetime.now(TST)
         cur.execute(
             """
             UPDATE students
