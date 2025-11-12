@@ -167,7 +167,6 @@ def home():
 def handle_login():
     data = request.get_json()
     student_id = data.get('studentId')
-    # 3. 修正：使用 timezone.utc 取得標準時間
     current_time = datetime.now(timezone.utc)
 
     if not student_id or student_id not in MASTER_ROSTER:
@@ -183,9 +182,60 @@ def handle_login():
         record = cur.fetchone()
 
         is_current_status_leave = record and record[0] == '請假' 
-        
-        if record:
-            status, leave_type, leave_remarks, last_updated_at = record
+       if record:
+    status, leave_type, leave_remarks, last_updated_at = record
+
+    # 不管狀態，每次登入即時刷新時間
+    cur.execute("UPDATE students SET last_updated_at = %s WHERE id = %s;", (current_time, student_id))
+    conn.commit()
+
+    if not is_current_status_leave:
+        cur.execute(
+            "UPDATE students SET status = '出席', last_updated_at = %s, leave_type = NULL, leave_remarks = NULL WHERE id = %s;",
+            (current_time, student_id)
+        )
+        conn.commit()
+        status = '出席'
+        leave_type = None
+        leave_remarks = None
+
+    leave_type = leave_type if leave_type else None
+    leave_remarks = leave_remarks if leave_remarks else None
+
+    return jsonify({
+        "id": student_id,
+        "name": student_name,
+        "status": status,
+        "leaveType": leave_type,
+        "leaveRemarks": leave_remarks,
+        "lastUpdatedAt": current_time.isoformat()
+    })
+
+        else:
+            cur.execute(
+                """
+                INSERT INTO students (id, name, status, last_updated_at)
+                VALUES (%s, %s, '出席', %s);
+                """,
+                (student_id, student_name, current_time)
+            )
+            conn.commit()
+            return jsonify({
+                "id": student_id,
+                "name": student_name,
+                "status": '出席',
+                "leaveType": None,
+                "leaveRemarks": None,
+                "lastUpdatedAt": current_time.isoformat()
+            })
+
+    except Exception as e:
+        print(f"Database error during login: {e}")
+        return jsonify({"error": {"error": "errors.loginFailed"}}), 500
+    finally:
+        if conn and not conn.closed:
+            conn.close()
+
             
             if not is_current_status_leave:
                 cur.execute(
