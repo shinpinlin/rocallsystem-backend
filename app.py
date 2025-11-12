@@ -155,9 +155,8 @@ def handle_login():
     data = request.get_json()
     student_id = data.get('studentId')
     current_time = datetime.now(TST)
-     if not student_id or student_id not in MASTER_ROSTER:
+    if not student_id or student_id not in MASTER_ROSTER:
         return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 404
-
     student_name = MASTER_ROSTER[student_id]
     conn = None
     try:
@@ -261,7 +260,6 @@ def handle_leave_application():
     leave_type = data.get('leaveType')
     remarks = data.get('remarks')
    current_time = datetime.now(TST)
-
     if not student_id or not leave_type:
         return jsonify({"error": {"error": "errors.emptyFields"}}), 400
 
