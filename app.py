@@ -155,7 +155,7 @@ def home():
 def handle_login():
     data = request.get_json()
     student_id = data.get('studentId')
-    current_time = datetime.now(timezone.utc)
+    current_time = datetime.now(timezone.utc) + timedelta(hours=8)
 
     if not student_id or student_id not in MASTER_ROSTER:
         return jsonify({"error": {"error": "errors.studentIdNotFound"}}), 404
